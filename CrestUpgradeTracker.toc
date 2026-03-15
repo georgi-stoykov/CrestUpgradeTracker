@@ -1,0 +1,10 @@
+## Interface: 120001
+## Title: CrestUpgradeTracker
+## Notes: Displays High Watermark Dawncrest discount information on item tooltips.
+## Author: Mightguy
+## Version: 2.0.0
+## SavedVariablesPerCharacter: CrestUpgradeTrackerDB
+
+Constants.lua
+Core.lua
+Tooltip.lua

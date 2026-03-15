@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.wowhead.com)",
+      "WebFetch(domain:warcraft.wiki.gg)"
+    ]
+  }
+}
