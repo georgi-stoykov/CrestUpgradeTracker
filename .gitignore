@@ -12,3 +12,9 @@ Desktop.ini
 
 # Build / package artifacts
 *.zip
+
+# Claude
+.claude/
+
+# Specs
+Spec.md
