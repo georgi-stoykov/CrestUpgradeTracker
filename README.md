@@ -53,6 +53,11 @@ Blizzard's upgrade discount system remembers the highest item level you've had i
 
 Each upgrade costs 20 Dawncrests. Weekly cap: 100 per type.
 
+## Known Limitations
+
+- **Trinkets and rings** may show incorrect upgrade costs in rare cases. The game groups different item subtypes together for watermark purposes (e.g., all weapons share one watermark), but the API reports them under separate internal slots. The addon cross-checks equipped items to work around this, but if you've previously owned a high-ilvl trinket or ring that is no longer equipped or in your bags, the addon may not detect that watermark and could overstate the upgrade cost. Equipping or carrying your highest-ilvl items in each slot ensures accurate results.
+- The `/cut reset` command only clears the addon's internal fallback watermarks. The game's own watermark data (used as the primary source) is unaffected and cannot be reset.
+
 ## Requirements
 
 - World of Warcraft: Midnight (12.0.1+)

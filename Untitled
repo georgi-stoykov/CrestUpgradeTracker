@@ -1,0 +1,1 @@
+CrestUpgradeTracker (CUT) is a World of Warcraft addon for **Midnight (12.0)** that tracks the **High Watermark** per equipment slot and displays **Dawncrest upgrade cost/discount information** on item tooltips. It also provides a `/cut` slash command with a full gear upgrade summary.

@@ -35,6 +35,36 @@ local function GetIlvlFromTooltip(tooltip)
     return nil
 end
 
+--- Parses the "Upgrade Level: TrackName X/Y" line from the tooltip.
+--- Returns trackName, currentRank, maxRank or nil if not found.
+local function GetUpgradeInfoFromTooltip(tooltip)
+    local name = tooltip:GetName()
+    if not name then return nil end
+    for i = 2, tooltip:NumLines() do
+        local fontStr = _G[name .. "TextLeft" .. i]
+        if fontStr then
+            local text = fontStr:GetText()
+            if text then
+                local trackName, cur, max = text:match("Upgrade Level: (%a+) (%d+)/(%d+)")
+                if trackName then
+                    return trackName, tonumber(cur), tonumber(max)
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- Finds the upgrade track by name (parsed from tooltip).
+local function FindTrackByName(trackName)
+    for _, track in ipairs(WT.UPGRADE_TRACKS) do
+        if track.name == trackName then
+            return track
+        end
+    end
+    return nil
+end
+
 --- Finds which equipment slot the item occupies (by link comparison).
 --- Returns the slot ID, or nil if not found (falls back to mappedSlots[1]).
 local function FindEquippedSlotID(link, candidateSlots)
@@ -76,10 +106,45 @@ local function OnItemTooltip(tooltip, data)
     local equippedSlotID    = FindEquippedSlotID(link, mappedSlots)
     local watermarkSlotID   = equippedSlotID or mappedSlots[1]
     local slotName          = WT.SLOT_NAMES[watermarkSlotID] or "Slot"
-    local watermark         = WT.GetWatermark(watermarkSlotID)
+    -- Build a full item link for watermark API calls.
+    -- GetInventoryItemLink (equipped) and tooltip:GetItem() (bag/bank items)
+    -- return proper "|cff...|Hitem:...|h[Name]|h|r" links that the API can parse.
+    -- data.hyperlink is often a bare "item:..." string the API silently ignores.
+    local watermarkLink
+    if equippedSlotID then
+        watermarkLink = GetInventoryItemLink("player", equippedSlotID)
+    elseif tooltip and tooltip.GetItem then
+        local _, tLink = tooltip:GetItem()
+        watermarkLink = tLink
+    end
+    if not watermarkLink then watermarkLink = link end
+    local watermark         = WT.GetWatermark(watermarkSlotID, watermarkLink)
+
+    -- The game shares watermarks across weapon subtypes (1H sword, 2H staff,
+    -- etc. have different ItemRedundancySlots but the game uses the max across
+    -- them for free upgrade eligibility). Check equipped items in all candidate
+    -- equipment slots and use the highest watermark found.
+    for _, sid in ipairs(mappedSlots) do
+        local eqLink = GetInventoryItemLink("player", sid)
+        if eqLink then
+            local eqWM = WT.GetWatermark(sid, eqLink)
+            if eqWM > watermark then watermark = eqWM end
+        end
+    end
 
     -- ── Identify item's track and rank ─────────────────────────────────────
-    local track, rank = FindTrackAndRank(currentIlvl)
+    -- Prefer parsing the authoritative "Upgrade Level:" line from the tooltip,
+    -- which avoids ambiguity when adjacent tracks share the same ilvl.
+    local track, rank
+    local tooltipTrackName, tooltipRank, tooltipMaxRank = GetUpgradeInfoFromTooltip(tooltip)
+    if tooltipTrackName then
+        track = FindTrackByName(tooltipTrackName)
+        rank  = tooltipRank
+    end
+    -- Fall back to ilvl-based lookup if tooltip parsing failed.
+    if not track then
+        track, rank = FindTrackAndRank(currentIlvl)
+    end
     if not track then return end
 
     local maxRank     = #track.ranks

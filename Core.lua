@@ -9,6 +9,12 @@ local function InitDB()
     if not CrestUpgradeTrackerDB then
         CrestUpgradeTrackerDB = {}
     end
+    -- Auto-reset watermarks when the season changes (tracks/ilvls change each season).
+    if CrestUpgradeTrackerDB.season ~= WT.CURRENT_SEASON then
+        CrestUpgradeTrackerDB.watermarks = {}
+        CrestUpgradeTrackerDB.season = WT.CURRENT_SEASON
+        print("|cff00ccffCrestUpgradeTracker|r: New season detected — watermarks reset.")
+    end
     if not CrestUpgradeTrackerDB.watermarks then
         CrestUpgradeTrackerDB.watermarks = {}
     end
@@ -16,10 +22,56 @@ end
 
 -- ─── Watermark Read / Write ────────────────────────────────────────────────
 
---- Returns the effective watermark ilvl for a given slot.
---- For dual-slot pairs (rings, trinkets, one-handers) this is the SECOND-highest
---- raw ilvl across both slots, matching Blizzard's High Watermark rules.
-function WT.GetWatermark(slotID)
+--- Returns the effective watermark ilvl for a given item.
+--- Tries multiple game APIs to get the authoritative watermark, which tracks
+--- ALL items ever obtained (including vendored/disenchanted gear).
+--- Falls back to addon-tracked per-slot watermarks only if all APIs fail.
+function WT.GetWatermark(slotID, itemLink)
+    if itemLink and C_ItemUpgrade then
+        -- Helper: extract watermark from a pair of (charWM, accountWM) return values.
+        local function extractWM(ok, charWM, accountWM)
+            if ok and (charWM or accountWM) then
+                local wm = math.max(charWM or 0, accountWM or 0)
+                if wm > 0 then return wm end
+            end
+            return nil
+        end
+
+        local best = 0
+
+        -- Approach 1: GetHighWatermarkForItem (per-item watermark).
+        if C_ItemUpgrade.GetHighWatermarkForItem then
+            local wm = extractWM(pcall(C_ItemUpgrade.GetHighWatermarkForItem, itemLink))
+            if wm and wm > best then best = wm end
+
+            if not wm then
+                local itemID = GetItemInfoInstant(itemLink)
+                if itemID then
+                    wm = extractWM(pcall(C_ItemUpgrade.GetHighWatermarkForItem, itemID))
+                    if wm and wm > best then best = wm end
+                end
+            end
+        end
+
+        -- Approach 2: GetHighWatermarkForSlot (per-slot watermark).
+        if C_ItemUpgrade.GetHighWatermarkSlotForItem and C_ItemUpgrade.GetHighWatermarkForSlot then
+            local ok1, redundancySlot = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem, itemLink)
+            if not (ok1 and redundancySlot) then
+                local itemID = GetItemInfoInstant(itemLink)
+                if itemID then
+                    ok1, redundancySlot = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem, itemID)
+                end
+            end
+            if ok1 and redundancySlot then
+                local wm = extractWM(pcall(C_ItemUpgrade.GetHighWatermarkForSlot, redundancySlot))
+                if wm and wm > best then best = wm end
+            end
+        end
+
+        if best > 0 then return best end
+    end
+
+    -- Fallback: addon-tracked watermarks (only sees items scanned since install/reset).
     local db = CrestUpgradeTrackerDB.watermarks
     local partner = WT.DUAL_SLOT_PAIRS[slotID]
     if partner then
@@ -35,9 +87,24 @@ local function GetRaw(slotID)
     return CrestUpgradeTrackerDB.watermarks[slotID] or 0
 end
 
---- Updates the raw watermark for a slot if ilvl is strictly higher.
+--- Returns true if the given ilvl matches any known upgrade track rank.
+--- This prevents inflating watermarks with ilvls from non-upgrade sources
+--- (e.g. crafted items, PvP gear, or items from other systems).
+local function IsTrackIlvl(ilvl)
+    for _, track in ipairs(WT.UPGRADE_TRACKS) do
+        for _, rankIlvl in ipairs(track.ranks) do
+            if rankIlvl == ilvl then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+--- Updates the raw watermark for a slot if ilvl is strictly higher
+--- AND the ilvl corresponds to a known upgrade track rank.
 local function SetRaw(slotID, ilvl)
-    if ilvl and ilvl > 0 and ilvl > GetRaw(slotID) then
+    if ilvl and ilvl > 0 and ilvl > GetRaw(slotID) and IsTrackIlvl(ilvl) then
         CrestUpgradeTrackerDB.watermarks[slotID] = ilvl
     end
 end
@@ -146,7 +213,53 @@ local function FindTrackAndRank(ilvl)
 end
 
 SLASH_CRESTUPGRADETRACKER1 = "/cut"
-SlashCmdList["CRESTUPGRADETRACKER"] = function()
+SlashCmdList["CRESTUPGRADETRACKER"] = function(msg)
+    msg = (msg or ""):lower():match("^%s*(.-)%s*$")
+    if msg == "reset" then
+        CrestUpgradeTrackerDB.watermarks = {}
+        WT.FullScan()
+        print("|cff00ccffCrestUpgradeTracker|r: Fallback watermarks cleared and re-scanned from current gear.")
+        return
+    end
+
+    if msg == "debug" then
+        print("|cff00ccffCrestUpgradeTracker|r — API Debug:")
+        print("  C_ItemUpgrade exists: " .. tostring(C_ItemUpgrade ~= nil))
+        if C_ItemUpgrade then
+            print("  .GetHighWatermarkForItem: " .. tostring(C_ItemUpgrade.GetHighWatermarkForItem ~= nil))
+            print("  .GetHighWatermarkForSlot: " .. tostring(C_ItemUpgrade.GetHighWatermarkForSlot ~= nil))
+            print("  .GetHighWatermarkSlotForItem: " .. tostring(C_ItemUpgrade.GetHighWatermarkSlotForItem ~= nil))
+        end
+        -- Test with main hand item
+        local testLink = GetInventoryItemLink("player", 16)
+        if testLink then
+            print("  Testing with Main Hand: " .. testLink)
+            if C_ItemUpgrade and C_ItemUpgrade.GetHighWatermarkForItem then
+                local ok, a, b = pcall(C_ItemUpgrade.GetHighWatermarkForItem, testLink)
+                print("    GetHighWatermarkForItem: ok=" .. tostring(ok) .. " char=" .. tostring(a) .. " account=" .. tostring(b))
+            end
+            if C_ItemUpgrade and C_ItemUpgrade.GetHighWatermarkSlotForItem then
+                local ok, slot = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem, testLink)
+                print("    GetHighWatermarkSlotForItem: ok=" .. tostring(ok) .. " slot=" .. tostring(slot))
+                if ok and slot and C_ItemUpgrade.GetHighWatermarkForSlot then
+                    local ok2, a, b = pcall(C_ItemUpgrade.GetHighWatermarkForSlot, slot)
+                    print("    GetHighWatermarkForSlot(" .. tostring(slot) .. "): ok=" .. tostring(ok2) .. " char=" .. tostring(a) .. " account=" .. tostring(b))
+                end
+            end
+        else
+            print("  No main hand item equipped for testing.")
+        end
+        -- Show fallback watermarks
+        print("  Fallback watermarks (from DB):")
+        for _, slotID in ipairs(WT.ALL_SLOTS) do
+            local raw = CrestUpgradeTrackerDB.watermarks[slotID]
+            if raw then
+                local name = WT.SLOT_NAMES[slotID] or ("Slot " .. slotID)
+                print("    " .. name .. " (slot " .. slotID .. "): " .. raw)
+            end
+        end
+        return
+    end
     print("|cff00ccffCrestUpgradeTracker|r — Equipped Gear Status:")
 
     -- Tally crests needed per track
@@ -159,13 +272,14 @@ SlashCmdList["CRESTUPGRADETRACKER"] = function()
         local loc = ItemLocation:CreateFromEquipmentSlot(slotID)
         if loc and C_Item.DoesItemExist(loc) then
             local ilvl = C_Item.GetCurrentItemLevel(loc)
+            local itemLink = GetInventoryItemLink("player", slotID)
             if ilvl and ilvl > 0 then
                 local track, rank = FindTrackAndRank(ilvl)
                 if track then
                     local maxRank = #track.ranks
                     local slotName = WT.SLOT_NAMES[slotID] or ("Slot " .. slotID)
                     local tc = "|cff" .. track.color
-                    local watermark = WT.GetWatermark(slotID)
+                    local watermark = WT.GetWatermark(slotID, itemLink)
 
                     if rank >= maxRank then
                         maxed = maxed + 1

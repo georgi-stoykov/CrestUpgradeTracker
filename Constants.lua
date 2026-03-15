@@ -67,6 +67,9 @@ WT.EQUIP_LOC_TO_SLOTS = {
     ["INVTYPE_RANGEDRIGHT"]    = { 16 },
 }
 
+-- Current season identifier — bump this each season to auto-reset watermarks.
+WT.CURRENT_SEASON = "Midnight_S1"
+
 -- WoW: Midnight (12.0) Season 1 upgrade track definitions.
 -- Source: https://www.wowhead.com/guide/midnight/item-level-gear-upgrades-dawncrests
 --
